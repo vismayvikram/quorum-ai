@@ -1,0 +1,6 @@
+{
+  "name": "Quorum",
+  "description": "Decisions made. Deadlines kept. A high-stakes productivity ecosystem featuring a Gemini-powered Planner Agent, deterministic Scheduler, and an automated Accountability Engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
