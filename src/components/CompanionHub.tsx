@@ -10,6 +10,7 @@ interface Message {
   role: 'user' | 'model';
   content: string;
   timestamp: number;
+  actionResults?: { type: string; subtaskId?: string; status: 'success' | 'failed'; reason?: string }[];
 }
 
 interface CompanionHubProps {
@@ -17,11 +18,12 @@ interface CompanionHubProps {
   taxes: TaxEffect[];
   virtualTime: number;
   tone: Tone;
+  onActionApplied?: () => void;
 }
 
 type Mood = 'happy' | 'encouraging' | 'neutral' | 'annoyed' | 'angry' | 'fiery';
 
-export function CompanionHub({ subtasks, taxes, virtualTime, tone }: CompanionHubProps) {
+export function CompanionHub({ subtasks, taxes, virtualTime, tone, onActionApplied }: CompanionHubProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -167,11 +169,17 @@ export function CompanionHub({ subtasks, taxes, virtualTime, tone }: CompanionHu
           id: Math.random().toString(36).substring(7),
           role: 'model',
           content: data.text,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          actionResults: data.actionResults
         };
         setMessages(prev => [...prev, modelMessage]);
         setMood(data.mood);
         setStatusLabel(data.statusLabel);
+
+        // Notify parent if actions were executed
+        if (data.actionsApplied && onActionApplied) {
+          onActionApplied();
+        }
       } else {
         throw new Error('Failed to fetch companion response');
       }
@@ -301,6 +309,31 @@ export function CompanionHub({ subtasks, taxes, virtualTime, tone }: CompanionHu
                     : 'bg-slate-50 text-slate-800 border-slate-100 rounded-bl-none'
                 }`}>
                   {renderMessageContent(msg.content)}
+
+                  {msg.actionResults && msg.actionResults.length > 0 && (
+                    <div className="mt-3 pt-2 border-t border-slate-200/60 space-y-1.5" id="message-action-results">
+                      <div className="text-[9px] font-black uppercase tracking-wider text-slate-400">Execution Log</div>
+                      {msg.actionResults.map((act, aIdx) => (
+                        <div key={aIdx} className={`flex items-start gap-1.5 px-2 py-1.5 rounded text-[11px] font-sans border ${
+                          act.status === 'success' 
+                            ? 'bg-emerald-50 border-emerald-100 text-emerald-800' 
+                            : 'bg-rose-50 border-rose-100 text-rose-800'
+                        }`}>
+                          <span className="font-bold text-xs leading-none">{act.status === 'success' ? '✓' : '✗'}</span>
+                          <div className="flex-1 leading-tight">
+                            <span className="font-bold uppercase text-[9px] tracking-wide block">
+                              {act.type.replace('_', ' ')}
+                            </span>
+                            {act.status === 'success' ? (
+                              <span className="text-[10px] opacity-90">Action applied successfully</span>
+                            ) : (
+                              <span className="text-[10px] opacity-90">{act.reason || 'Action failed'}</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </motion.div>
             ))}

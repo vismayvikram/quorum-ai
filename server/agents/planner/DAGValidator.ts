@@ -3,6 +3,7 @@ import { Subtask } from '../../../src/types';
 export interface ValidationResult {
   isValid: boolean;
   errors: string[];
+  traceMessage: string;
 }
 
 export const DAGValidator = {
@@ -39,9 +40,14 @@ export const DAGValidator = {
       errors.push(`Total estimated duration (${totalEst}m) exceeds available time before deadline (${totalDeadlineDurationMinutes}m).`);
     }
 
+    const traceMessage = errors.length === 0
+      ? `DAG Validator — Structure verified: 0 cycles, total duration (${totalEst} mins) is within deadline bounds.`
+      : `DAG Validator — Structure invalid: ${errors.join('; ')}`;
+
     return {
       isValid: errors.length === 0,
-      errors
+      errors,
+      traceMessage
     };
   },
 

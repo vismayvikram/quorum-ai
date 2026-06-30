@@ -1,4 +1,4 @@
-import { Subtask } from '../../src/types';
+import { Subtask, UrgencyBreakdown } from '../../src/types';
 
 export const UrgencyEngine = {
   /**
@@ -12,7 +12,7 @@ export const UrgencyEngine = {
     taskPriority: number,
     currentVirtualTime: number,
     allSubtasks: Subtask[]
-  ): number {
+  ): { score: number; breakdown: UrgencyBreakdown } {
     // Constant weights
     const W_TP = 0.50;
     const W_NP = 0.25;
@@ -73,7 +73,42 @@ export const UrgencyEngine = {
 
     // Clamp score to [0, 100] and round to 1 decimal place
     const finalScore = Math.max(0, Math.min(100, score));
-    return Math.round(finalScore * 10) / 10;
+    const roundedScore = Math.round(finalScore * 10) / 10;
+
+    const roundOneDec = (num: number) => Math.round(num * 10) / 10;
+
+    const remainingHours = timeRemainingMs / (3600 * 1000);
+    const taskDuration = subtask.estimatedDuration || 0;
+
+    const breakdown: UrgencyBreakdown = {
+      timePressure: {
+        raw: timeRemainingMs <= 0 
+          ? "Overdue" 
+          : `${remainingHours.toFixed(1)}h left for ${taskDuration}m task`,
+        weighted: roundOneDec(W_TP * TP * M_active),
+        weight: W_TP
+      },
+      priority: {
+        raw: `${taskPriority}/10 priority`,
+        weighted: roundOneDec(W_NP * NP * M_active),
+        weight: W_NP
+      },
+      dependency: {
+        raw: `${D_blocked} blocked tasks`,
+        weighted: roundOneDec(W_DEP * DEP * M_active),
+        weight: W_DEP
+      },
+      historicalRisk: {
+        raw: `${Math.round(RISK)}% failure rate`,
+        weighted: roundOneDec(W_RISK * RISK * M_active),
+        weight: W_RISK
+      }
+    };
+
+    return {
+      score: roundedScore,
+      breakdown
+    };
   },
 
   /**

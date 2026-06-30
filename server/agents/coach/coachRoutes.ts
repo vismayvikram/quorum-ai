@@ -4,12 +4,13 @@ import { store } from '../../db/store';
 import { CoachEngine } from './CoachEngine';
 import { Profile, Subtask, TaxEffect } from '../../../src/types';
 import { VirtualClock } from '../../time/VirtualClock';
+import { DeterministicScheduler } from '../../scheduler/DeterministicScheduler';
 
 export const coachRouter = Router();
 
 coachRouter.post('/coach/chat', requireLocalIdentity, async (req: AuthenticatedRequest, res) => {
   try {
-    const { messages, virtualTime } = req.body;
+    const { messages } = req.body;
     const userId = req.userId!;
 
     const profile = store.getDoc('profiles', userId) as Profile;
@@ -20,15 +21,155 @@ coachRouter.post('/coach/chat', requireLocalIdentity, async (req: AuthenticatedR
     const subtasks = store.query('subtasks', s => s.userId === userId) as Subtask[];
     const activeTaxes = store.query('taxes', t => t.userId === userId && t.active) as TaxEffect[];
 
+    // Always fetch live virtual time to prevent Time-Warp session caching or leakage
+    const currentVirtualTime = VirtualClock.getVirtualTime();
+
     const result = await CoachEngine.generateResponse(
       messages || [],
       profile,
       subtasks,
       activeTaxes,
-      virtualTime || Date.now()
+      currentVirtualTime
     );
 
-    res.json(result);
+    let actionsApplied = false;
+    const actionResults: { type: string; subtaskId?: string; status: 'success' | 'failed'; reason?: string }[] = [];
+
+    // Apply any actions returned by the CoachEngine
+    if (result.actions && Array.isArray(result.actions)) {
+      for (const action of result.actions) {
+        try {
+          if (action.type === 'reschedule_subtask') {
+            if (!action.subtaskId) {
+              actionResults.push({ type: 'reschedule_subtask', status: 'failed', reason: 'Missing subtaskId' });
+              continue;
+            }
+            const subtask = store.getDoc('subtasks', action.subtaskId) as Subtask;
+            if (!subtask) {
+              actionResults.push({ type: 'reschedule_subtask', subtaskId: action.subtaskId, status: 'failed', reason: 'Subtask not found (might have been deleted)' });
+              continue;
+            }
+            if (subtask.userId !== userId) {
+              actionResults.push({ type: 'reschedule_subtask', subtaskId: action.subtaskId, status: 'failed', reason: 'Access denied: subtask ownership check failed' });
+              continue;
+            }
+
+            const settings = store.getDoc('settings', userId) || {};
+            const { scheduledSubtasks: rescheduled } = DeterministicScheduler.schedule(
+              [{ ...subtask, status: 'pending' }],
+              profile,
+              settings,
+              action.newStartTime || currentVirtualTime,
+              req.timezoneOffset || 0
+            );
+
+            if (rescheduled && rescheduled.length > 0) {
+              store.setDoc('subtasks', subtask.id, rescheduled[0]);
+              actionsApplied = true;
+              actionResults.push({ type: 'reschedule_subtask', subtaskId: action.subtaskId, status: 'success' });
+            } else {
+              actionResults.push({ type: 'reschedule_subtask', subtaskId: action.subtaskId, status: 'failed', reason: 'Deterministic scheduler failed to find a valid slot (focus hours or blocked windows).' });
+            }
+
+          } else if (action.type === 'complete_subtask') {
+            if (!action.subtaskId) {
+              actionResults.push({ type: 'complete_subtask', status: 'failed', reason: 'Missing subtaskId' });
+              continue;
+            }
+            const subtask = store.getDoc('subtasks', action.subtaskId) as Subtask;
+            if (!subtask) {
+              actionResults.push({ type: 'complete_subtask', subtaskId: action.subtaskId, status: 'failed', reason: 'Subtask not found (might have been deleted)' });
+              continue;
+            }
+            if (subtask.userId !== userId) {
+              actionResults.push({ type: 'complete_subtask', subtaskId: action.subtaskId, status: 'failed', reason: 'Access denied: subtask ownership check failed' });
+              continue;
+            }
+
+            store.updateDoc('subtasks', action.subtaskId, { status: 'completed' });
+            
+            // Check if all subtasks for the task are completed
+            const taskId = subtask.taskId;
+            const allSubtasks = store.query('subtasks', s => s.taskId === taskId) as Subtask[];
+            const allCompleted = allSubtasks.every(s => s.status === 'completed' || s.status === 'missed');
+            if (allCompleted) {
+              store.updateDoc('tasks', taskId, { status: 'completed' });
+            }
+            actionsApplied = true;
+            actionResults.push({ type: 'complete_subtask', subtaskId: action.subtaskId, status: 'success' });
+
+          } else if (action.type === 'delete_subtask') {
+            if (!action.subtaskId) {
+              actionResults.push({ type: 'delete_subtask', status: 'failed', reason: 'Missing subtaskId' });
+              continue;
+            }
+            const subtask = store.getDoc('subtasks', action.subtaskId) as Subtask;
+            if (!subtask) {
+              actionResults.push({ type: 'delete_subtask', subtaskId: action.subtaskId, status: 'failed', reason: 'Subtask not found (might have been deleted)' });
+              continue;
+            }
+            if (subtask.userId !== userId) {
+              actionResults.push({ type: 'delete_subtask', subtaskId: action.subtaskId, status: 'failed', reason: 'Access denied: subtask ownership check failed' });
+              continue;
+            }
+
+            store.setDoc('subtasks', action.subtaskId, undefined);
+            // Clean up from other subtasks' dependencies
+            const otherSubtasks = store.query('subtasks', s => s.userId === userId) as Subtask[];
+            otherSubtasks.forEach(s => {
+              if (s.dependencies?.includes(action.subtaskId)) {
+                const updatedDeps = s.dependencies.filter(id => id !== action.subtaskId);
+                store.updateDoc('subtasks', s.id, { dependencies: updatedDeps });
+              }
+            });
+            actionsApplied = true;
+            actionResults.push({ type: 'delete_subtask', subtaskId: action.subtaskId, status: 'success' });
+
+          } else if (action.type === 'replan_pending') {
+            const pendingSubtasks = store.query('subtasks', s => s.userId === userId && s.status === 'pending') as Subtask[];
+            const settings = store.getDoc('settings', userId) as any;
+            if (!settings) {
+              actionResults.push({ type: 'replan_pending', status: 'failed', reason: 'User settings not found' });
+              continue;
+            }
+            if (pendingSubtasks.length === 0) {
+              actionResults.push({ type: 'replan_pending', status: 'failed', reason: 'No pending subtasks found to reschedule' });
+              continue;
+            }
+
+            const replanStartMs = action.replanStart || currentVirtualTime;
+            const { scheduledSubtasks: rescheduled } = DeterministicScheduler.schedule(
+              pendingSubtasks,
+              profile,
+              settings,
+              replanStartMs,
+              0
+            );
+            rescheduled.forEach(st => {
+              store.setDoc('subtasks', st.id, st);
+            });
+            actionsApplied = true;
+            actionResults.push({ type: 'replan_pending', status: 'success' });
+          } else {
+            actionResults.push({ type: action.type || 'unknown', status: 'failed', reason: `Unknown action type: ${action.type}` });
+          }
+        } catch (actionErr: any) {
+          console.error('Failed to execute coach action:', action, actionErr);
+          actionResults.push({ 
+            type: action.type || 'unknown', 
+            subtaskId: action.subtaskId, 
+            status: 'failed', 
+            reason: actionErr?.message || 'Unexpected server error' 
+          });
+        }
+      }
+    }
+
+    res.json({
+      ...result,
+      actionsApplied,
+      actionResults
+    });
   } catch (error: any) {
     console.error('Coach Chat API error:', error);
     res.status(500).json({ error: error?.message || 'Failed to generate coach response' });
@@ -53,7 +194,41 @@ coachRouter.post('/coach/excuse', requireLocalIdentity, async (req: Authenticate
       virtualTime || Date.now()
     );
 
-    res.json(result);
+    if (result.rescheduled) {
+      // Reschedule the missed subtask
+      const settings = store.getDoc('settings', userId) || {};
+      const { scheduledSubtasks: rescheduled } = DeterministicScheduler.schedule(
+        [{ ...subtask, status: 'pending' }],
+        profile,
+        settings,
+        VirtualClock.getVirtualTime(),
+        req.timezoneOffset || 0
+      );
+      if (rescheduled && rescheduled.length > 0) {
+        store.setDoc('subtasks', subtask.id, rescheduled[0]);
+      }
+
+      // True forgiveness: deactivate any active penalty taxes for this user
+      const activeTaxes = store.query('taxes', t => t.userId === userId && t.active) as TaxEffect[];
+      activeTaxes.forEach(tax => {
+        store.updateDoc('taxes', tax.id, { active: false });
+      });
+    }
+
+    // Generate Accountability Agent trace line
+    let traceMessage = '';
+    if (result.rescheduled) {
+      traceMessage = `Accountability Agent — evaluated your reason, verdict: forgiven, rescheduled subtask to next focus window.`;
+    } else {
+      const activeTaxes = store.query('taxes', t => t.userId === userId && t.active) as TaxEffect[];
+      const taxLabel = activeTaxes.length > 0 ? activeTaxes[0].type : 'shorten_next_block';
+      traceMessage = `Accountability Agent — evaluated your reason, verdict: invalid, applied tax: ${taxLabel}.`;
+    }
+
+    res.json({
+      ...result,
+      traceMessage
+    });
   } catch (error: any) {
     console.error('Coach Excuse API error:', error);
     res.status(500).json({ error: error?.message || 'Failed to evaluate excuse' });

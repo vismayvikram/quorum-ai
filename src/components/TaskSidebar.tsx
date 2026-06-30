@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Subtask, Task } from '../types';
 import { Clock, Calendar, AlertCircle, CheckCircle, ListTodo, ShieldAlert, Award } from 'lucide-react';
+import { UrgencyBreakdownTooltip } from './UrgencyBreakdownTooltip';
 
 interface TaskSidebarProps {
   subtasks: Subtask[];
@@ -54,14 +55,19 @@ export function TaskSidebar({ subtasks, tasks, virtualTime, onCompleteSubtask, o
     }
   };
 
-  const renderUrgencyBadge = (score: number, band?: string, isInactive?: boolean) => (
-    <div 
-      className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 text-[11px] font-bold shadow-sm ${getUrgencyBadgeColor(band, isInactive)}`}
-      title={`Urgency: ${score.toFixed(0)}`}
-    >
-      {score.toFixed(0)}
-    </div>
-  );
+  const renderUrgencyBadge = (st: Subtask, isInactive?: boolean) => {
+    const score = st.urgencyScore || 0;
+    const band = st.urgencyBand;
+    return (
+      <UrgencyBreakdownTooltip breakdown={st.urgencyBreakdown} score={score}>
+        <div 
+          className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 text-[11px] font-bold shadow-sm ${getUrgencyBadgeColor(band, isInactive)}`}
+        >
+          {score.toFixed(0)}
+        </div>
+      </UrgencyBreakdownTooltip>
+    );
+  };
 
   return (
     <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden w-full">
@@ -130,7 +136,7 @@ export function TaskSidebar({ subtasks, tasks, virtualTime, onCompleteSubtask, o
                         {formatTime(st.assignedSlot!.start)} • {parentTitle}
                       </p>
                     </div>
-                    {renderUrgencyBadge(st.urgencyScore || 0, st.urgencyBand, isInactive)}
+                    {renderUrgencyBadge(st, isInactive)}
                     {!isInactive && (
                       <button
                         onClick={(e) => {
@@ -190,7 +196,7 @@ export function TaskSidebar({ subtasks, tasks, virtualTime, onCompleteSubtask, o
                           Due {new Date(st.assignedSlot?.end || 0).toLocaleDateString()}
                         </p>
                       </div>
-                      {renderUrgencyBadge(st.urgencyScore || 0, st.urgencyBand, isInactive)}
+                      {renderUrgencyBadge(st, isInactive)}
                       {!isInactive && (
                         <button
                           onClick={(e) => {

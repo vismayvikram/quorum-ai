@@ -2,90 +2,102 @@
 
 ## 1. Overview
 
-Quorum is a full-stack Node.js/Express + React application built around two core design commitments: **deterministic logic stays deterministic** (only the parts of the system that genuinely need judgment call into the Gemini API — scheduling, urgency, and time itself are pure functions, not model outputs), and **every functional concern is isolated into its own contract-bound module**, so a failure or unexpected model response in one part of the system cannot corrupt another.
+Quorum is a full-stack Node.js/Express + React application built around three core design commitments: **deterministic logic stays deterministic** (scheduling, urgency, and time itself are pure functions, not model outputs — Gemini is reserved for the calls that genuinely require judgment), **every functional concern is isolated into its own contract-bound module** (a failure or unexpected model response in one agent cannot corrupt another), and **agentic reasoning is visible, not just internal** — both the deterministic agents' decisions and the AI agents' actions are surfaced honestly to the user, including a clear distinction between speculative previews and committed state.
 
-The system is organized around four cooperating agents — **Planner**, **Scheduler**, **Accountability**, and **Insight** — plus a lightweight **Coach** layer for conversational interaction, all coordinated through a single, centrally-resolved notion of time.
+The system is organized around four cooperating agents — **Planner**, **Scheduler**, **Accountability**, and **Insight** — plus a **Coach** layer that, unlike a typical chat assistant, has genuine write access to the user's schedule through a structured, validated action layer.
 
 ---
 
 ## 2. Architecture Diagram
 
-```mermaid
-flowchart TB
-    subgraph Client["Frontend (React + Tailwind)"]
-        TaskEntry["Task Creation Modal\n(3-step wizard)"]
-        Calendar["Calendar View\n(week / day)"]
-        Sidebar["Sidebar\n(Selected Day / Global Urgency tabs)"]
-        Coach["Coach / Companion Drawer"]
-        Insights["Insight Card"]
-        DevControls["Hidden Developer Controls\n(Time-Warp)"]
-    end
-
-    subgraph Server["Backend (Node.js + Express)"]
-        Middleware["Context Injection Middleware\n(profile -> every agent call)"]
-        Planner["Planner Agent\nDecompositionEngine.ts"]
-        Validator["DAG Validator\n(cycle check, duration bounds)"]
-        Scheduler["Scheduler Agent\nDeterministicScheduler.ts"]
-        Urgency["Urgency Engine\n(pure scoring function)"]
-        Accountability["Accountability Agent\nAccountabilityEngine.ts"]
-        Tax["Procrastination Tax\nApplication Layer"]
-        CoachEngine["Coach Engine\ncoachRoutes.ts"]
-        InsightAgent["Insight Agent\n(mocked -> real, on usage data)"]
-        NotifEngine["Notification Decision Engine"]
-        Clock["Virtual Clock\n(single source of truth for time)"]
-        Identity["Identity Module\n(local UUID today, swappable for real auth)"]
-    end
-
-    subgraph External["External Services"]
-        Gemini["Google Gemini API\n(structured JSON output)"]
-        Firestore["Firebase Firestore"]
-        LocalFallback["Local disk fallback\n(pre-Firestore-setup only)"]
-        CalendarAPI["Google Calendar API\n(Phase 2 — not yet wired)"]
-        CloudScheduler["Cloud Scheduler\n(Phase 2 target for push-based checks)"]
-    end
-
-    TaskEntry --> Planner
-    Planner --> Gemini
-    Planner --> Validator
-    Validator --> Scheduler
-    Scheduler --> Urgency
-    Scheduler --> Firestore
-    Calendar --> Scheduler
-    Sidebar --> Urgency
-
-    Accountability --> Clock
-    Accountability --> Tax
-    Tax --> Gemini
-    Accountability --> NotifEngine
-
-    Coach --> CoachEngine
-    CoachEngine --> Gemini
-
-    Insights --> InsightAgent
-    InsightAgent --> Firestore
-
-    DevControls -.->|gated, dev accounts only| Clock
-
-    Middleware --> Planner
-    Middleware --> CoachEngine
-    Middleware --> Accountability
-
-    Identity --> Firestore
-    Firestore -.fallback.-> LocalFallback
-
-    Scheduler -.Phase 2.-> CalendarAPI
-    Accountability -.Phase 2.-> CloudScheduler
 ```
+┌──────────────────────────────── CLIENT (React + Tailwind) ─────────────────────────────────┐
+│                                                                                              │
+│  Auth Screen ──┐   Task Creation Modal        Calendar View         Coach Drawer            │
+│  (email/guest) │   (3-step wizard)             (week / day)         ──────────────          │
+│                │        │                          │                  │      │              │
+│                │        ▼                          │                  ▼      ▼              │
+│                │   Agent Trace Panel                │              Chat reply  Excuse Modal  │
+│                │   (speculative vs. committed)       │           + execution    (Accountab-  │
+│                │                                     │              log         ility Hearing)│
+│                │                                     ▼                                       │
+│                │                                 Sidebar (Selected Day / Global Urgency)      │
+│                │                                     │                                       │
+│                │                                     ▼                                       │
+│                │                          Urgency Breakdown Tooltip                           │
+│                │                                                                              │
+│                │                                                       Hidden Dev Controls    │
+│                │                                                       (Time-Warp)            │
+└────────────────┼──────────────────────────────────────────────────────────────────────────────┘
+                 │
+                 ▼
+┌──────────────────────────────── SERVER (Node.js + Express) ────────────────────────────────┐
+│                                                                                              │
+│   Identity Module ──► Context Injection Middleware ──► (profile fed into every agent call)  │
+│   (anon JWT + email                  │                                                      │
+│    lookup)                           ▼                                                      │
+│                          ┌───────────────────────┐                                          │
+│                          │     Planner Agent      │──► Gemini (decompose + classify)         │
+│                          │ DecompositionEngine.ts │                                          │
+│                          └───────────┬────────────┘                                          │
+│                                      │ dry-run (speculative)                                 │
+│                                      ▼                                                       │
+│                          ┌───────────────────────┐                                          │
+│                          │     DAG Validator       │  (cycle / duration / dependency checks) │
+│                          └───────────┬────────────┘                                          │
+│                                      │ on commit (binding)                                   │
+│                                      ▼                                                       │
+│                          ┌────────────────────────────────────┐                              │
+│            ┌────────────►│   Scheduler Agent (THE single       │◄───────────┐                │
+│            │             │   placement authority)               │            │                │
+│            │             │   DeterministicScheduler.ts          │            │                │
+│            │             │   - reads live VirtualClock           │            │                │
+│            │             │   - reads live active taxes            │           │                │
+│            │             │   - enforces tax penalties uniformly  │            │                │
+│            │             └───────────────┬──────────────────────┘            │                │
+│            │                             │                                   │                │
+│   Action Processor                       ▼                              Accountability Agent  │
+│   (reschedule_subtask,            Firestore (tasks,                     AccountabilityEngine.ts│
+│    complete_subtask,               subtasks, profile)                   - grace-period check   │
+│    delete_subtask,                                                       (pure, vs VirtualClock)│
+│    replan_pending)                                                      - excuse eval ──► Gemini│
+│            ▲                                                                   │              │
+│            │ validates ownership/existence per-action,                        ▼              │
+│            │ NO handler exists for `taxes` collection                   Tax Application Layer  │
+│            │                                                            (taxes collection)      │
+│   Coach Engine ──► Gemini (chat + function-calling)                     - ONLY the Excuse flow's │
+│   coachRoutes.ts                                                          "forgiven" verdict can │
+│                                                                            deactivate a tax       │
+│   Urgency Engine (pure fn, returns full weighted breakdown) ──► Firestore reads                  │
+│   Insight Agent (statistical, reads completion/miss logs) ──► Firestore                          │
+│   Notification Decision Engine (rule-based, cooldown-aware)                                      │
+│   Virtual Clock — single source of truth for ALL time-dependent reads above                      │
+│                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+                 │                                                    │
+                 ▼                                                    ▼
+   Local disk fallback                                   Phase 2, not yet wired:
+   (pre-Firestore-setup only)                             - Google Calendar API (OAuth)
+                                                            - Cloud Scheduler (push-based checks)
+                                                            - Firebase Authentication
+```
+
+**Key paths to note:**
+- **Planner → dry-run → Scheduler** happens during roadmap *preview* only (speculative, not written to the database). The binding placement happens separately, on commit.
+- **Coach → Action Processor → Scheduler**: chat-triggered reschedules never compute timestamps themselves — they hand a desired time to the same Scheduler every other flow uses, which is the sole authority on where a task actually lands.
+- **Tax Application Layer** has exactly one writer (the Excuse flow's forgiven-verdict path) and one reader (the Scheduler, at execution time) — the Coach's action schema has no route to it at all, by design.
 
 ---
 
 ## 3. Core Design Principles
 
-1. **Time has exactly one source of truth.** Every grace-period check, urgency calculation, and scheduling decision reads from a single `VirtualClock` module (`virtualTime = realTime + offset`, offset defaulting to `0`). No other file in the scheduling or accountability path is permitted to call `Date.now()` or `new Date()` directly. This is what makes the Time-Warp developer control safe: it changes one offset value, and every downstream calculation — already reading from that one function — simply reflects the new time. There is no separate "demo logic" anywhere in the system.
+1. **Time has exactly one source of truth.** Every grace-period check, urgency calculation, scheduling decision, and tax-state read resolves from a single `VirtualClock` module (`virtualTime = realTime + offset`, offset defaulting to `0`). No scheduling, accountability, or tax-enforcement code path calls `Date.now()` or `new Date()` directly — including the Coach's chat-triggered reschedule actions, which read the live virtual time at the exact moment of execution rather than trusting any timestamp passed earlier in a request.
 
-2. **Deterministic logic stays deterministic.** Scheduling placement and urgency scoring are pure functions over known inputs — they don't call Gemini. This keeps them fast, free, testable in isolation, and fully explainable (a judge can be shown exactly why a task ranked where it did). The Gemini API is reserved for the two places that genuinely require judgment: decomposing an ambiguous goal into structured subtasks, and evaluating the validity of a free-text excuse.
+2. **Deterministic logic stays deterministic, and there is exactly one scheduler.** Placement and urgency scoring are pure functions over known inputs — they don't call Gemini. Critically, every code path that can result in a subtask being scheduled or rescheduled — initial task commit, the Excuse Modal's approval flow, and the Coach's `reschedule_subtask` and `replan_pending` actions — routes through the same `DeterministicScheduler.schedule` function. There is no second, independent implementation that could drift out of sync, and no path where an AI-generated raw timestamp is trusted directly; the model expresses intent (a desired time), and the scheduler is the sole authority on whether that's valid and where the task actually lands.
 
-3. **Modules are isolated by contract, not just by convention.** Each agent is a self-contained directory with a defined request/response shape. A module only reads and writes its own Firestore collections directly; anything another module needs from it goes through that module's exposed interface, never a shared mutable state object. Practical effect: a malformed Gemini response inside the Planner can't corrupt Accountability's state, and a future module (a real Insight Agent, a real Identity/Auth module) is a new contract-bound folder, not a rewrite of existing ones.
+3. **Modules are isolated by contract, not just by convention — including what an agent is *not* allowed to do.** Each agent owns its own Firestore collections; cross-module needs go through a defined interface, never shared mutable state. This isolation is also used defensively: the Coach's chat action schema has no handler for the `taxes` collection at all. Active accountability penalties cannot be edited, deactivated, or bypassed through conversation — only the Excuse Modal's structured approval flow, on an explicit "forgiven" verdict, has the authorization to deactivate a tax. This is a structural guarantee (the code path doesn't exist), not a prompt-level instruction the model could be talked around.
+
+4. **Agentic reasoning is shown, not just used.** Each deterministic agent emits a short, factual trace message describing what it computed — never anthropomorphized "thinking" language, since these agents don't reason, they calculate. The Planner additionally runs a non-binding dry-run through the Scheduler during the roadmap preview step, purely to give the user (and the trace panel) a realistic projection before anything is committed; this speculative trace is visually distinct (dashed border, muted color, explicit "(Speculative Preview)" label) from the actual, binding placement that occurs on commit. The same honesty principle applies to the Urgency Engine: every score is paired with its full weighted breakdown, available on demand, so a ranking is never just a number to be trusted.
 
 ---
 
@@ -93,15 +105,16 @@ flowchart TB
 
 | Module | Responsibility | Calls Gemini? |
 |---|---|---|
-| **Planner Agent** (`server/agents/planner/`) | Decomposes a task description into a dependency-aware DAG of subtasks; classifies the task as `execution` vs `learning_goal` from the description alone, in the same call | Yes |
+| **Planner Agent** (`server/agents/planner/`) | Decomposes a task description into a dependency-aware DAG of subtasks; classifies `execution` vs `learning_goal` in the same call; runs a non-binding scheduling dry-run for the roadmap preview | Yes |
 | **DAG Validator** (`server/agents/planner/DAGValidator.ts`) | Structural validation of the Planner's output: cycle detection, dangling-dependency checks, duration-sum-vs-deadline sanity | No |
-| **Scheduler Agent** (`server/agents/scheduler/`) | Pure-function placement of validated subtasks onto the calendar, respecting focus-hour preferences and blocked time | No |
-| **Urgency Engine** (`server/agents/scheduler/UrgencyEngine.ts`) | Deterministic scoring of every open subtask, recomputed fresh on every read (never persisted, since it depends on virtual time) | No |
-| **Accountability Agent** (`server/agents/accountability/`) | Detects missed soft deadlines against the virtual clock; evaluates user-submitted excuses and applies the resulting Procrastination Tax | Yes (excuse evaluation only — detection itself is pure logic) |
-| **Coach Engine** (`server/agents/coach/`) | Conversational layer: daily briefings, "Critique Progress," free-text chat. Lower-cost quick actions (e.g. a generic nudge) are served from pre-written tone-matched templates rather than a fresh model call | Yes, selectively |
+| **Scheduler Agent** (`server/agents/scheduler/DeterministicScheduler.ts`) | The single, exclusive engine for all subtask placement — initial commit, excuse-approved reschedules, and chat-triggered reschedules/replans alike. Reads live active-tax state at execution time and applies the corresponding penalty (schedule compression, zero grace period) uniformly regardless of entry point | No |
+| **Urgency Engine** (`server/agents/scheduler/UrgencyEngine.ts`) | Deterministic scoring of every open subtask, recomputed fresh on every read; returns the full weighted breakdown (not just the final score) for transparent display | No |
+| **Accountability Agent** (`server/agents/accountability/`) | Detects missed soft deadlines against the virtual clock; evaluates user-submitted excuses (`/api/coach/excuse`) and is the sole authority that can deactivate an active tax on a forgiven verdict | Yes (excuse evaluation only — detection itself is pure logic) |
+| **Coach Engine** (`server/agents/coach/`) | Conversational layer with genuine write capability: daily briefings, free-text chat, and a structured action schema (`reschedule_subtask`, `complete_subtask`, `delete_subtask`, `replan_pending`) that the server validates and executes — never trusting the model's claim of success without confirming the underlying write actually happened | Yes |
+| **Action Processor** (within `coachRoutes.ts`) | Intercepts structured actions from the Coach's response, validates ownership/existence of each target subtask before executing, routes scheduling-related actions through the Scheduler, and returns a per-action result so partial batch failures are reported honestly rather than masked by a single success flag | No |
 | **Insight Agent** (`server/agents/insights/`) | Surfaces behavioral patterns from the user's own logged completion/miss history; depth grows with usage | No (statistical, not generative) |
-| **Notification Decision Engine** (`server/agents/notifications/`) | Rule-based evaluation of what, if anything, should be surfaced to the user on each poll — grace-period alerts, upcoming-block reminders, daily summary, idle nudges — with cooldown logic to avoid recreating the notification fatigue the product is meant to solve | No |
-| **Identity Module** (`server/identity/`) | Today: passthrough for a client-generated UUID. Designed so a future real-auth integration populates the same `userId` field without touching any other module | No |
+| **Notification Decision Engine** (`server/agents/notifications/`) | Rule-based evaluation of what to surface on each poll — grace-period alerts, upcoming-block reminders, daily summary, idle nudges — with cooldown logic to avoid recreating notification fatigue | No |
+| **Identity Module** (`server/identity/`) | Issues JWT-backed anonymous guest sessions by default (zero-friction public access); supports an optional email-based lookup so a returning user's session resolves to the same `userId`, and therefore the same calendar, from any device | No |
 
 ---
 
@@ -109,54 +122,48 @@ flowchart TB
 
 ### Goal Decomposition (Planner)
 1. User submits a task description, deadline, priority, and optional max-time constraint through the 3-step creation modal.
-2. The Planner Agent sends a single Gemini call, with the user's onboarding profile (goals, self-disclosed context, tone preference) injected as system context, requesting a strict JSON-schema response containing both a `task_type` classification and the subtask DAG.
-3. The DAG Validator runs: cycle check, dependency-integrity check, duration-sum-vs-deadline check. On failure, one retry prompt naming the specific defect is issued; on a second failure, the system falls back to a safe flat checklist so a malformed response never blocks the user.
-4. The user sees an editable roadmap preview. On confirming the plan, a one-time recheck runs — the same structural validation always, plus an optional soft Gemini sanity check only if an edit looks semantically inconsistent (e.g. a multi-hour subtask shrunk to a few minutes).
-5. The committed DAG is handed to the Scheduler.
+2. The Planner Agent sends a single Gemini call, with the user's onboarding profile injected as system context, requesting a strict JSON-schema response containing both a `task_type` classification and the subtask DAG.
+3. The DAG Validator runs structural checks (cycle detection, dependency integrity, duration-sum-vs-deadline). On failure, one retry prompt naming the specific defect is issued; on a second failure, the system falls back to a safe flat checklist.
+4. The Planner runs a non-binding dry-run through the Scheduler to project a realistic placement, surfaced in the Agent Trace Panel as a clearly-labeled speculative preview.
+5. The user edits the roadmap as needed. On confirming the plan, a one-time recheck runs, then the final, user-edited subtask tree is sent to the scheduler-commit endpoint, where the actual, binding placement is computed and permanently written.
 
-### Scheduling
-The Scheduler is a pure function: given the DAG, the user's focus-hour preference, manually-entered blocked time, and the current virtual time, it assigns each subtask a slot. No model call is involved — this keeps placement fast and lets the logic be unit-tested against fixed fixtures.
+### Scheduling & Rescheduling
+`DeterministicScheduler.schedule` is the single authority for where a subtask lands on the calendar, called identically whether triggered by initial commit, an approved excuse, or a Coach chat action. Given a desired anchor time, the user's focus-hour preference, manually-entered blocked time, and the current virtual time, it assigns a slot — rolling forward automatically to the next valid window if the requested time conflicts with a constraint. It also reads the user's currently active taxes at execution time and applies the corresponding penalty (e.g. compressing the duration of the next placed block, or collapsing the grace period to zero under Maximum Firmness), appending an explicit notation to the trace log so the consequence is visible, not silent.
 
 ### Urgency Scoring
-Recomputed on every fetch of the task list (dashboard, calendar, sidebar all read from the same computation), combining:
-- **Timeline pressure** — remaining estimated work relative to remaining time-to-deadline (the dominant weight)
-- **Normalized priority** — the user's 1–10 input, scaled
-- **Dependency factor** — whether the subtask is currently blocking others from starting
-- **Historical risk** — the user's own past miss-rate in that task's category
+Recomputed on every fetch of the task list, combining timeline pressure (dominant weight), normalized priority, dependency-blocking factor, and historical category risk into both a final score and its full weighted breakdown. Scores drive sort order; bands (high/moderate/low) drive color-coding — both read from the same underlying number. The breakdown is available on hover or tap on every urgency badge across the dashboard, sidebar, and task detail modal.
 
-Scores are banded (high / moderate / low) for visual color-coding in the UI, while the underlying sort always uses the precise numeric score — color and order are driven by the same number, but serve different purposes. Exact weight values and band cutoffs are kept as named constants in `UrgencyEngine.ts` so they can be tuned without touching the scoring logic itself.
+### Accountability, Excuses, and the Procrastination Tax
+1. The Accountability Agent compares each subtask's soft deadline plus grace period against virtual time on read — purely deterministic — and flags expired subtasks as missed.
+2. From a missed task's detail view, a user can "plead their case": submit a reason, which goes to Gemini with task and profile context, returning a verdict (`valid` / `invalid` / `conditional`) and, where applicable, a tax type.
+3. On a forgiven verdict, the Excuse flow is the *only* code path authorized to query and deactivate the user's active tax documents, and to reschedule the affected subtask back to `pending` through the Scheduler.
+4. On an unforgiven-but-granted verdict, the tax is written as an active flag and immediately enforced by the Scheduler on any subsequent placement for that user, regardless of how that placement is triggered.
+5. Tax expiry (where applicable, e.g. Maximum Firmness reverting at day's end) is computed relative to an explicit `virtualMidnightTimestamp`, recalculated against the active offset rather than a relative "+24 hours" value.
 
-### Accountability & the Procrastination Tax
-1. Each subtask carries a soft deadline plus a grace period. On read, the Accountability Agent compares this against virtual time — purely deterministic, no model call — and flags expired subtasks as missed.
-2. When a user submits a reason for a missed task, that reason — along with task and profile context — goes to Gemini via a schema that returns more than a binary verdict:
-   ```
-   verdict: valid | invalid | conditional
-   tax: none | shorten_next_block | lock_element | max_firmness
-   response_message: <in the user's current tone>
-   ```
-3. If the excuse is judged invalid but the extension is granted anyway, the returned tax is actually applied — not just narrated. Active taxes are written to the user's profile as flags the frontend reads and visibly enforces (a shortened next focus block, a locked UI element, or a forced "Maximum Firmness" tone override).
-4. Tax expiry is computed relative to an explicit `virtualMidnightTimestamp`, not a relative "+24 hours" offset — so if the virtual clock is advanced past midnight, the tax expires immediately and correctly, rather than drifting.
-
-### Contextual Coaching
-The Coach Engine generates a daily briefing once per virtual day (gated by a stored last-briefing-date check, to avoid regenerating it on every page load) and handles free-text or quick-action conversation. Generic encouragement nudges are served from tone-matched templates rather than a fresh model call each time; reasoning-heavy actions like "Critique Progress" call Gemini with the user's current task and performance state as context.
+### Conversational Agency (Coach)
+The Coach Engine handles daily briefings and free-text conversation, with generic encouragement nudges served from tone-matched templates rather than a fresh model call each time. For task-modifying requests, the model is given the user's current subtask list (IDs, times, dependencies) as context and returns a response combining natural-language text with zero or more structured actions. The server processes these actions independently of the generated text:
+- Each action's target subtask is checked for existence and ownership before execution; a stale, hallucinated, or unauthorized ID fails that specific action without affecting others in the same batch.
+- `reschedule_subtask` and `replan_pending` both delegate the actual placement decision to `DeterministicScheduler.schedule` — the model supplies a desired time, the scheduler is the final authority on where it lands.
+- Per-action results are returned to the client and rendered as an explicit execution log beneath the chat response, so a confidently-worded message from the model cannot misrepresent what the database actually did — the log is the source of truth, the chat text is commentary.
+- A successful write triggers a unified refresh signal (`actionsApplied`), routed through the same central refresh mechanism used by roadmap commit and excuse approval, so the calendar, sidebar, and detail views update immediately without a manual reload.
 
 ---
 
 ## 6. Virtual Time Architecture
 
-`VirtualClock` is the single module permitted to compute `realTime + offset`. Every other module — Scheduler, Urgency Engine, Accountability — receives the resolved virtual timestamp as an input rather than computing it independently. This single-source-of-truth design is what makes the developer-only **Time-Warp** control safe to use for live demonstration: advancing the offset doesn't trigger any special "demo mode" code path, it just changes the one value every real piece of logic already reads from.
+`VirtualClock` is the single module permitted to compute `realTime + offset`. Every other module receives the resolved virtual timestamp as an input rather than computing it independently — including the Coach's action processor, which reads live virtual time at the moment a chat-triggered reschedule actually executes, not at the moment the conversation started. This is what makes the Time-Warp developer control safe: advancing the offset doesn't trigger a special code path, every real piece of logic already reads from the one function being changed.
 
 Two safeguards sit on top of this:
-- **Developer gating** — Time-Warp is hidden behind an explicit, off-by-default "Enable Developer Controls" setting, invisible during normal use, and (by design intent) disabled outright once a real, externally-synced calendar connection is active for a non-developer account — since shifting virtual time against a live external calendar would desynchronize the two.
-- **Virtual-day boundaries** — anything scoped to "the rest of the day" (e.g. an active Procrastination Tax) resolves against the virtual day, recalculated relative to the active offset, not the real-world clock.
+- **Developer gating** — Time-Warp is hidden behind an explicit, off-by-default developer setting, and disabled outright once a real, externally-synced calendar connection is active for a non-developer account.
+- **Virtual-day boundaries** — anything scoped to "the rest of the day" (an active Maximum Firmness tax, for instance) resolves against the virtual day, not the real-world clock.
 
 ---
 
 ## 7. Data Persistence & Identity Model
 
-**Identity, currently:** a client-generated UUID, persisted in browser storage, with no sign-up or login step. Every Firestore document is keyed against this value in a plain `userId` field — structurally identical to what a real authenticated `uid` would look like, so introducing real authentication later is a matter of populating that same field from a login response, not a schema redesign.
+**Identity:** the default experience is a zero-friction anonymous guest session — a JWT-backed identity issued automatically on first load, requiring no credentials, so a judge or new user reaches the working app immediately. On optional sign-in path supports a lightweight email-based lookup: providing an email either creates a new profile keyed to a fresh `userId`, or resolves to an existing one, so the same calendar reliably reappears from any device using that email. This is intentionally not a hardened authentication system (no email verification, no session expiry policy) — a deliberate scope decision consistent with the original brief's call for minimal auth complexity, not an oversight.
 
-**Persistence:** primary data lives in Firebase Firestore — a natural fit for the DAG-shaped subtask documents and for real-time updates to the calendar view. A local-disk fallback exists for development convenience when Firestore credentials aren't yet configured; this fallback is intentionally scoped to that pre-setup situation rather than as a permanent dual-write path, since silently diverging between two stores after a real Firestore connection is already active would risk data drift that's hard to notice until a read comes back inconsistent.
+**Persistence:** primary data lives in Firebase Firestore. A local-disk fallback exists for development convenience when Firestore credentials aren't yet configured, intentionally scoped to that pre-setup situation rather than as a permanent dual-write path.
 
 ---
 
@@ -167,63 +174,67 @@ Two safeguards sit on top of this:
   /time/
     VirtualClock.ts            — single source of truth for time
   /identity/
-    LocalIdentity.ts           — UUID passthrough today; swappable for real auth later
+    LocalIdentity.ts           — anonymous JWT sessions + email lookup
+    AuthService.ts             — email-based account creation/lookup
   /middleware/
     contextInjector.ts         — attaches user profile to every agent request
   /agents/
     planner/
-      DecompositionEngine.ts   — Gemini call + task_type classification
+      DecompositionEngine.ts   — Gemini call, task_type classification, speculative dry-run
       DAGValidator.ts          — cycle/duration/dependency validation
     scheduler/
-      DeterministicScheduler.ts
-      UrgencyEngine.ts
+      DeterministicScheduler.ts — exclusive placement engine, tax enforcement
+      UrgencyEngine.ts         — scoring + full weighted breakdown
     accountability/
-      AccountabilityEngine.ts  — grace-period checks, excuse evaluation, tax application
+      AccountabilityEngine.ts  — grace-period checks, excuse evaluation, tax lifecycle
     coach/
-      CoachEngine.ts
-      coachRoutes.ts
+      CoachEngine.ts           — conversation + structured action schema
+      coachRoutes.ts           — action interception, validation, execution
     insights/
       InsightGenerator.ts
     notifications/
       NotificationDecisionEngine.ts
   /routes/
     profile.ts
+    scheduler/commit.ts        — binding placement on roadmap confirmation
 
 /src
   /components/
     onboarding/
     dashboard/
     roadmap/
+      AgentTracePanel.tsx      — speculative vs. committed reasoning display
     accountability/
-    developer/                — hidden Time-Warp controls
+      ExcuseModal.tsx
+      TaskDetailModal.tsx
+    shared/
+      UrgencyBreakdownTooltip.tsx
+    auth/
+      LoginForm.tsx
+      SignupForm.tsx
+    developer/                 — hidden Time-Warp controls
   /hooks/
     useVirtualTime.ts
   /store/
-    useAppStore.ts
+    useAppStore.ts             — central refreshTrigger, shared by commit/coach/excuse flows
 ```
 
 ---
 
 ## 9. Gemini Output Reliability
 
-Every structured Gemini call in the system follows the same defensive pattern:
-1. Strict JSON-schema enforcement on the response.
-2. A deterministic validation pass appropriate to that call (e.g. cycle/duration checks for the DAG).
-3. One automatic retry, with the specific validation failure named in the retry prompt.
-4. A safe, minimal fallback (e.g. a flat checklist) if the retry also fails — so a single bad model response degrades gracefully instead of breaking the user-facing flow.
+Every structured Gemini call follows the same defensive pattern: strict JSON-schema enforcement, a deterministic validation pass appropriate to that call, one automatic retry naming the specific failure, and a safe minimal fallback if the retry also fails. The Coach's action layer extends this principle one step further — the model's output is never trusted as a completed fact. Every proposed action is independently validated (ownership, existence) and executed server-side, with the real per-action outcome surfaced back to the user regardless of how the model's accompanying text was phrased.
 
 ---
 
 ## 10. Deployment Architecture
 
-The application is built and deployed on **Google Cloud Run** as a containerized service — meaning the Node.js/Express backend and React frontend deploy together as a single unit, with the Gemini API key handled as a server-side secret rather than exposed to the client.
+The application is built and deployed through **Google AI Studio**, which runs the deployed app as a containerized service on **Cloud Run** under the hood — the Node.js/Express backend and React frontend deploy together as a single unit, with the Gemini API key handled as a server-side secret.
 
-Accountability checks currently run on read (whenever the frontend polls or loads, missed-deadline detection runs against the virtual clock). The system already exposes this as a stateless HTTPS endpoint (`/api/accountability/cron-check`), structured so that swapping in an external trigger — **Cloud Scheduler** calling that same endpoint on an interval — requires no change to the underlying detection logic, only a change in what invokes it.
+Accountability checks currently run on read (whenever the frontend polls or loads, missed-deadline detection runs against the virtual clock), backed by a lightweight background poll for passive state transitions. The system already exposes a stateless HTTPS endpoint (`/api/accountability/cron-check`), structured so that swapping in an external trigger — **Cloud Scheduler** calling that same endpoint — requires no change to the underlying detection logic, only a change in what invokes it.
 
 ---
 
 ## 11. Scalability & Extensibility
 
-Because every agent is a contract-bound module owning its own data, two kinds of growth are cheap by design:
-- **Replacing a mocked component** (the Insight Agent's depth, or the Identity module's auth backend) means rewriting the inside of one module — its external contract doesn't change, so nothing that calls it needs to change either.
-- **Adding a new agent** means adding a new directory with its own contract, not modifying the control flow of existing ones.
+Because every agent is a contract-bound module owning its own data, two kinds of growth are cheap by design: replacing a mocked component (the Insight Agent's depth, or the Identity module's auth backend) means rewriting the inside of one module without changing what calls it; and adding a new agent means adding a new directory with its own contract, not modifying the control flow of existing ones. The Coach's action layer demonstrates this directly — its write capability was added without altering the Scheduler, Validator, or Accountability modules at all; it simply became a new, validated client of the same `DeterministicScheduler.schedule` contract everything else already used.

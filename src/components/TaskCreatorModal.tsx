@@ -6,6 +6,7 @@ import {
   X, Mic, MicOff, Play, CheckCircle2, ChevronRight, AlertTriangle, Clock, 
   Trash2, Plus, CornerDownRight, Check, Sparkles, Sliders, RefreshCw 
 } from 'lucide-react';
+import { AgentTracePanel } from './AgentTracePanel';
 
 interface TaskCreatorModalProps {
   isOpen: boolean;
@@ -32,6 +33,7 @@ export function TaskCreatorModal({ isOpen, onClose, onConfirm }: TaskCreatorModa
   const [isDecomposing, setIsDecomposing] = useState(false);
   const [taskType, setTaskType] = useState<TaskType>('execution');
   const [subtasks, setSubtasks] = useState<Partial<Subtask>[]>([]);
+  const [traceMessages, setTraceMessages] = useState<string[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // Step 3: Success state
@@ -45,6 +47,7 @@ export function TaskCreatorModal({ isOpen, onClose, onConfirm }: TaskCreatorModa
       setDeadlineHours('24');
       setPriority(5);
       setSubtasks([]);
+      setTraceMessages([]);
       setValidationError(null);
     }
   }, [isOpen]);
@@ -111,6 +114,7 @@ export function TaskCreatorModal({ isOpen, onClose, onConfirm }: TaskCreatorModa
         const data = await res.json();
         setTaskType(data.taskType || 'execution');
         setSubtasks(data.subtasks || []);
+        setTraceMessages(data.traceMessages || []);
         setStep(2);
       } else {
         throw new Error('Failed to decompose task');
@@ -363,6 +367,8 @@ export function TaskCreatorModal({ isOpen, onClose, onConfirm }: TaskCreatorModa
                   <span>{validationError}</span>
                 </div>
               )}
+
+              <AgentTracePanel traceMessages={traceMessages} />
 
               {/* Subtasks DAG customizations list */}
               <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">

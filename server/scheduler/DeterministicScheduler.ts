@@ -1,4 +1,5 @@
-import { Subtask, Profile, Settings } from '../../src/types';
+import { Subtask, Profile, Settings, TaxEffect } from '../../src/types';
+import { store } from '../db/store';
 
 interface FocusRange {
   start: number;
@@ -15,8 +16,14 @@ export const DeterministicScheduler = {
     profile: Profile,
     settings: Settings,
     startVirtualTime: number,
-    timezoneOffsetMinutes: number = 0
-  ): Subtask[] {
+    timezoneOffsetMinutes: number = 0,
+    isSpeculative: boolean = false
+  ): { scheduledSubtasks: Subtask[]; traceMessage: string } {
+    // Check active taxes for the user
+    const activeTaxes = store.query('taxes', t => t.userId === profile.id && t.active) as TaxEffect[];
+    const isShortenActive = activeTaxes.some(t => t.type === 'shorten_next_block');
+    const isMaxFirmnessActive = activeTaxes.some(t => t.type === 'max_firmness');
+
     // 1. Sort subtasks topologically or by order to ensure dependencies are scheduled first.
     // Since we validated they are cycle-free, we can schedule them in topological order.
     const scheduled: Subtask[] = [];
@@ -79,6 +86,13 @@ export const DeterministicScheduler = {
       }
 
       const st = unscheduled.splice(readyIndex, 1)[0];
+
+      // Apply the 'shorten_next_block' compression tax if active
+      if (isShortenActive) {
+        const originalDuration = st.estimatedDuration || 15;
+        const compressedMin = Math.max(10, Math.ceil(originalDuration * 0.75));
+        st.estimatedDuration = compressedMin;
+      }
 
       // Earliest start time is the max of (startVirtualTime, all dependency end times, and the global cursor)
       let earliestStart = Math.max(startVirtualTime, globalCursor);
@@ -196,6 +210,26 @@ export const DeterministicScheduler = {
       }
     }
 
-    return scheduled;
+    // 4. Construct trace message
+    const uniqueDays = new Set(scheduled.map(st => st.assignedSlot ? new Date(st.assignedSlot.start).toDateString() : '').filter(Boolean)).size;
+    const blockedCount = settings.blockedWindows?.length || 0;
+    const focusStart = profile.focusHours?.[0]?.start || '09:00';
+    const focusEnd = profile.focusHours?.[0]?.end || '17:00';
+
+    const prefix = isSpeculative 
+      ? `Scheduler Agent (Speculative Preview) — Projected placement of` 
+      : `Scheduler Agent — Placed`;
+
+    let taxSuffix = '';
+    if (isShortenActive) {
+      taxSuffix += ' [25% Schedule Compression tax applied]';
+    }
+    if (isMaxFirmnessActive) {
+      taxSuffix += ' [0-minute Grace Period enforced]';
+    }
+
+    const traceMessage = `${prefix} ${scheduled.length} subtask${scheduled.length !== 1 ? 's' : ''} across ${uniqueDays} day${uniqueDays !== 1 ? 's' : ''}, respecting ${blockedCount} blocked window${blockedCount !== 1 ? 's' : ''} and your focus hours (${focusStart}-${focusEnd}).${taxSuffix}`;
+
+    return { scheduledSubtasks: scheduled, traceMessage };
   }
 };

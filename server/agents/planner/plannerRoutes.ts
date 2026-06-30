@@ -16,7 +16,9 @@ plannerRouter.post('/planner/decompose', requireLocalIdentity, async (req: Authe
     description,
     deadlineMinutes || 0,
     profile,
-    settings?.durationMultiplier || 1.0
+    settings || {},
+    settings?.durationMultiplier || 1.0,
+    req.timezoneOffset || 0
   );
 
   res.json(result);

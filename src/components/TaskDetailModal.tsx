@@ -3,10 +3,11 @@ import { Subtask, Task, TaxEffect } from '../types';
 import { 
   X, Calendar, Clock, AlertCircle, CheckCircle2, 
   ArrowRight, ShieldAlert, BarChart3, Info, 
-  History, Settings2, ExternalLink
+  History, Settings2, ExternalLink, Flame
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getParentTaskSummary } from '../lib/getParentTaskSummary';
+import { UrgencyBreakdownTooltip } from './UrgencyBreakdownTooltip';
 
 interface TaskDetailModalProps {
   subtask: Subtask | null;
@@ -17,6 +18,7 @@ interface TaskDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   onComplete: (id: string) => void;
+  onPleadCase?: (subtask: Subtask) => void;
 }
 
 export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
@@ -27,7 +29,8 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   taxes,
   isOpen,
   onClose,
-  onComplete
+  onComplete,
+  onPleadCase
 }) => {
   if (!subtask) return null;
 
@@ -76,6 +79,18 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                   <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${getStatusColor(subtask.status)}`}>
                     {subtask.status}
                   </span>
+                  {subtask.urgencyScore !== undefined && (subtask.status === 'pending' || subtask.status === 'missed') && (
+                    <UrgencyBreakdownTooltip breakdown={subtask.urgencyBreakdown} score={subtask.urgencyScore}>
+                      <span className={`text-[10px] font-bold tracking-wide uppercase px-2 py-0.5 rounded flex items-center gap-1 cursor-help ${
+                        subtask.urgencyBand === 'red' ? 'bg-red-500 text-white animate-pulse' :
+                        subtask.urgencyBand === 'amber' ? 'bg-amber-500 text-white' :
+                        'bg-emerald-500 text-white'
+                      }`}>
+                        {subtask.urgencyBand === 'red' && <Flame className="w-3 h-3 shrink-0" />}
+                        Urgency: {subtask.urgencyScore}
+                      </span>
+                    </UrgencyBreakdownTooltip>
+                  )}
                   {subtask.assignedSlot && (
                     <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
                       <Clock className="w-3 h-3" />
@@ -259,6 +274,18 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   Mark as Completed
+                </button>
+              )}
+              {subtask.status === 'missed' && onPleadCase && (
+                <button
+                  onClick={() => {
+                    onPleadCase(subtask);
+                    onClose();
+                  }}
+                  className="flex-1 bg-red-600 hover:bg-red-750 text-white font-black text-xs uppercase tracking-widest py-3.5 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2"
+                >
+                  <ShieldAlert className="w-4 h-4" />
+                  Plead Case to Coach
                 </button>
               )}
               <button

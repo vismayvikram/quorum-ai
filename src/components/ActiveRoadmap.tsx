@@ -1,5 +1,6 @@
 import { Subtask } from '../types';
 import { CheckCircle2, Clock, XCircle, AlertTriangle, Flame } from 'lucide-react';
+import { UrgencyBreakdownTooltip } from './UrgencyBreakdownTooltip';
 
 interface ActiveRoadmapProps {
   subtasks: Subtask[];
@@ -121,14 +122,16 @@ export function ActiveRoadmap({ subtasks, virtualTime, onComplete, isMaxFirmness
 
                   <div className="flex items-center gap-2">
                     {st.urgencyScore !== undefined && st.status === 'pending' && (
-                      <span className={`text-[10px] font-bold tracking-wide uppercase px-2 py-0.5 rounded flex items-center gap-1 ${
-                        st.urgencyBand === 'red' ? 'bg-red-500 text-white animate-pulse' :
-                        st.urgencyBand === 'amber' ? 'bg-amber-500 text-white' :
-                        'bg-emerald-500 text-white'
-                      }`}>
-                        {st.urgencyBand === 'red' && <Flame className="w-3 h-3 shrink-0" />}
-                        Urgency: {st.urgencyScore}
-                      </span>
+                      <UrgencyBreakdownTooltip breakdown={st.urgencyBreakdown} score={st.urgencyScore}>
+                        <span className={`text-[10px] font-bold tracking-wide uppercase px-2 py-0.5 rounded flex items-center gap-1 cursor-help ${
+                          st.urgencyBand === 'red' ? 'bg-red-500 text-white animate-pulse' :
+                          st.urgencyBand === 'amber' ? 'bg-amber-500 text-white' :
+                          'bg-emerald-500 text-white'
+                        }`}>
+                          {st.urgencyBand === 'red' && <Flame className="w-3 h-3 shrink-0" />}
+                          Urgency: {st.urgencyScore}
+                        </span>
+                      </UrgencyBreakdownTooltip>
                     )}
 
                     <span className={`text-[10px] font-bold tracking-wide uppercase px-2 py-0.5 rounded ${badgeStyle}`}>

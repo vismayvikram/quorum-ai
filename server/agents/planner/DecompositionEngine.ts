@@ -3,6 +3,8 @@ import { Profile, Subtask, TaskType } from '../../../src/types';
 import { DAGValidator } from './DAGValidator';
 import { v4 as uuidv4 } from 'uuid';
 import { getAI } from '../../ai';
+import { DeterministicScheduler } from '../../scheduler/DeterministicScheduler';
+import { VirtualClock } from '../../time/VirtualClock';
 
 const schema: Schema = {
   type: Type.OBJECT,
@@ -35,8 +37,10 @@ export const DecompositionEngine = {
     description: string, 
     deadlineMinutes: number, 
     profile: Profile,
-    multiplier: number = 1.0
-  ): Promise<{ taskType: TaskType, subtasks: Partial<Subtask>[] }> {
+    settings: any,
+    multiplier: number = 1.0,
+    timezoneOffset: number = 0
+  ): Promise<{ taskType: TaskType; subtasks: Partial<Subtask>[]; traceMessages: string[] }> {
     const prompt = `
 You are the Planner Agent for a user named ${profile.id}.
 User goals: ${profile.goals}
@@ -80,9 +84,24 @@ Task: ${description}
         const valResult = DAGValidator.validate(subtasks, deadlineMinutes);
         
         if (valResult.isValid) {
+          const count = subtasks.length;
+          const subtasksWithDeps = subtasks.filter((st: any) => st.dependencies && st.dependencies.length > 0).length;
+          const plannerTrace = `Planner Agent — Classified as ${data.task_type || 'execution'} task. Generated ${count} subtasks with ${subtasksWithDeps} dependency connections.`;
+
+          // Speculative scheduling to generate Scheduler trace:
+          const { traceMessage: schedulerTrace } = DeterministicScheduler.schedule(
+            subtasks,
+            profile,
+            settings || {},
+            VirtualClock.getVirtualTime(),
+            timezoneOffset,
+            true // isSpeculative
+          );
+
           return {
             taskType: data.task_type || 'execution',
-            subtasks
+            subtasks,
+            traceMessages: [plannerTrace, valResult.traceMessage, schedulerTrace]
           };
         } else {
           console.warn(`DAG Validation failed for model ${modelName}:`, valResult.errors);
@@ -131,9 +150,25 @@ Task: ${description}
       }
     }
 
+    const count = fallbackSubtasks.length;
+    const subtasksWithDeps = fallbackSubtasks.filter((st: any) => st.dependencies && st.dependencies.length > 0).length;
+    const plannerTrace = `Planner Agent (Fallback) — Classified as ${isLearningGoal ? 'learning_goal' : 'execution'} task. Generated ${count} fallback subtasks with ${subtasksWithDeps} dependency connections.`;
+    const valResult = DAGValidator.validate(fallbackSubtasks, deadlineMinutes);
+
+    // Speculative scheduling to generate Scheduler trace:
+    const { traceMessage: schedulerTrace } = DeterministicScheduler.schedule(
+      fallbackSubtasks,
+      profile,
+      settings || {},
+      VirtualClock.getVirtualTime(),
+      timezoneOffset,
+      true // isSpeculative
+    );
+
     return {
       taskType: isLearningGoal ? 'learning_goal' : 'execution',
-      subtasks: fallbackSubtasks
+      subtasks: fallbackSubtasks,
+      traceMessages: [plannerTrace, valResult.traceMessage, schedulerTrace]
     };
   }
 };

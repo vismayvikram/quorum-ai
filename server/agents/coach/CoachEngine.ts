@@ -16,6 +16,36 @@ const responseSchema: Schema = {
     statusLabel: {
       type: Type.STRING,
       description: "A short 1-3 word phrase describing your current attitude/stance, e.g., 'Cheering', 'Neutral', 'Slightly Disappointed', 'ROASTING', 'PANICKING'."
+    },
+    actions: {
+      type: Type.ARRAY,
+      description: "Optional list of database or scheduling actions to execute based on user requests (e.g. rescheduling, completing, or deleting tasks).",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          type: {
+            type: Type.STRING,
+            description: "The type of action to perform. MUST be one of: 'reschedule_subtask', 'complete_subtask', 'delete_subtask', 'replan_pending'."
+          },
+          subtaskId: {
+            type: Type.STRING,
+            description: "The ID of the subtask to modify, complete, or delete. Required for reschedule_subtask, complete_subtask, and delete_subtask actions."
+          },
+          newStartTime: {
+            type: Type.NUMBER,
+            description: "Required for reschedule_subtask. Epoch millisecond timestamp of the new start time."
+          },
+          newEndTime: {
+            type: Type.NUMBER,
+            description: "Required for reschedule_subtask. Epoch millisecond timestamp of the new end time."
+          },
+          replanStart: {
+            type: Type.NUMBER,
+            description: "Optional for replan_pending. Epoch millisecond timestamp to start replanning from. Defaults to the current virtual time."
+          }
+        },
+        required: ["type"]
+      }
     }
   },
   required: ["text", "mood", "statusLabel"]
@@ -28,7 +58,7 @@ export const CoachEngine = {
     subtasks: Subtask[],
     activeTaxes: TaxEffect[],
     virtualTime: number
-  ): Promise<{ text: string; mood: 'happy' | 'encouraging' | 'neutral' | 'annoyed' | 'angry' | 'fiery'; statusLabel: string }> {
+  ): Promise<{ text: string; mood: 'happy' | 'encouraging' | 'neutral' | 'annoyed' | 'angry' | 'fiery'; statusLabel: string; actions?: any[] }> {
     
     const isMaxFirmnessActive = activeTaxes.some(t => t.type === 'max_firmness' && t.active);
     const effectiveTone: Tone = isMaxFirmnessActive ? 'maximum_firmness' : profile.tone;
@@ -52,16 +82,26 @@ export const CoachEngine = {
       return virtualTime > st.assignedSlot.end && virtualTime <= deadlineWithGrace;
     });
 
+    const subtaskDetailLines = subtasks.map(s => {
+      const slotStr = s.assignedSlot 
+        ? `${new Date(s.assignedSlot.start).toLocaleString()} to ${new Date(s.assignedSlot.end).toLocaleString()} (Start ms: ${s.assignedSlot.start}, End ms: ${s.assignedSlot.end})`
+        : 'Unscheduled';
+      return `- ID: "${s.id}", Title: "${s.title}", Status: "${s.status}", Scheduled: ${slotStr}, Duration: ${s.estimatedDuration} mins, Dependencies: [${s.dependencies?.join(', ') || ''}]`;
+    }).join('\n');
+
     const timelineContext = `
 Timeline Status:
 - Total Scheduled Subtasks: ${total}
 - Completed Subtasks: ${completed}
 - Missed Subtasks: ${missed}
 - Pending/Upcoming Subtasks: ${pending}
-- Current Active Subtask in Progress: ${activeSubtask ? `"${activeSubtask.title}" (Ends at ${new Date(activeSubtask.assignedSlot!.end).toLocaleTimeString()})` : 'None'}
-- Current Overdue Subtasks in Grace Period: ${overdueSubtasks.length > 0 ? overdueSubtasks.map(s => `"${s.title}"`).join(', ') : 'None'}
+- Current Active Subtask in Progress: ${activeSubtask ? `"${activeSubtask.title}" (ID: "${activeSubtask.id}", Ends at ${new Date(activeSubtask.assignedSlot!.end).toLocaleTimeString()})` : 'None'}
+- Current Overdue Subtasks in Grace Period: ${overdueSubtasks.length > 0 ? overdueSubtasks.map(s => `"${s.title}" (ID: "${s.id}")`).join(', ') : 'None'}
 - Active penalty taxes: ${activeTaxes.length > 0 ? activeTaxes.map(t => t.type).join(', ') : 'None'}
-- Current Virtual Time: ${new Date(virtualTime).toLocaleString()}
+- Current Virtual Time: ${new Date(virtualTime).toLocaleString()} (Epoch ms: ${virtualTime})
+
+All Subtasks List (Use these IDs for any actions):
+${subtaskDetailLines}
 `;
 
     const systemPrompt = `
@@ -80,17 +120,25 @@ Your behavior must reflect the Effective Tone:
 3. "firm": Strict, sassy, slightly sarcastic, and uncompromising. Nudge them with some attitude if they miss tasks. Use humorous guilt or high-energy warnings.
 4. "maximum_firmness": Blazing intensity, dramatic urgency, and witty/humorous roasts! Urge them to get off their phone and act immediately. Point out exactly which tasks they missed. Act like a drill sergeant but keep it funny and constructive.
 
-Analyze the user's progress:
-- If they have missed tasks: show appropriate level of concern/sternness according to the tone.
-- If they have completed tasks: celebrate their win!
-- If they are currently inside an active task slot: push them to keep focus.
-- If they are in Max Firmness penalty mode: your attitude is "fiery", and you should roast them/rally them to clean up the timeline.
+Analyze the user's progress and requests:
+- YOU HAVE REAL POWER TO RESCHEDULE AND MODIFY THE USER'S TASKS. If they ask you to reschedule, move, postpone, delay, complete, or delete a task, you MUST perform that action by populating the "actions" array in your JSON output.
+- When you schedule/reschedule/modify, confirm it to the user in your text (e.g., "Done! I've rescheduled 'X' to 3:00 PM for you.").
+- DO NOT make up actions if the user did not request them.
+
+How to construct actions:
+1. "reschedule_subtask": Moves a subtask. Requires "subtaskId", "newStartTime", and "newEndTime" (epoch millisecond timestamps).
+   Example: If the user says "Move subtask X to tomorrow at 2 PM", and current virtual time is ${new Date(virtualTime).toLocaleString()} (epoch: ${virtualTime}), calculate the new start/end timestamps based on this.
+2. "complete_subtask": Completes a subtask. Requires "subtaskId".
+3. "delete_subtask": Deletes a subtask. Requires "subtaskId".
+4. "replan_pending": Runs the automatic deterministic scheduler on all remaining pending subtasks, sequentialized from "replanStart" (epoch ms, optional, defaults to current virtual time).
+   Use this if the user asks you to "reschedule everything", "replan my day", or "I'm behind, fix my schedule".
 
 Response Schema:
 You must respond with a JSON object containing:
 - "text": A Markdown string containing your reply to the user. Speak in the first person. Keep it punchy, engaging, and under 3-4 paragraphs.
 - "mood": The emotional display of your avatar. Choose EXACTLY one of: "happy" (when they do well in gentle/neutral/firm), "encouraging" (when they need a boost), "neutral" (ordinary/factual state), "annoyed" (when they miss tasks in neutral/firm), "angry" (when they miss tasks/fail in firm), "fiery" (when maximum firmness is active or they are severely failing).
 - "statusLabel": A short 1-3 word phrase describing your current stance (e.g. "ROASTING", "Cheering You On", "Quietly Judging", "Slightly Disappointed", "Let's Go!", "Focused").
+- "actions": Optional list of actions to perform.
 
 Current Timeline Statistics for analysis:
 ${timelineContext}
@@ -129,7 +177,8 @@ ${timelineContext}
         return {
           text: data.text || "I'm right here with you! Let's stay focused and push forward.",
           mood: data.mood || 'neutral',
-          statusLabel: data.statusLabel || 'Online'
+          statusLabel: data.statusLabel || 'Online',
+          actions: data.actions || []
         };
       } catch (e: any) {
         lastError = e;

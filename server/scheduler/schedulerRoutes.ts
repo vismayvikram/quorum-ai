@@ -51,7 +51,7 @@ schedulerRouter.post('/scheduler/commit', requireLocalIdentity, (req: Authentica
     gracePeriodMinutes: AccountabilityEngine.getGracePeriodMinutes(profile.tone)
   }));
 
-  const scheduledSubtasks = DeterministicScheduler.schedule(
+  const { scheduledSubtasks, traceMessage } = DeterministicScheduler.schedule(
     rawSubtasks,
     profile,
     settings,
@@ -67,7 +67,8 @@ schedulerRouter.post('/scheduler/commit', requireLocalIdentity, (req: Authentica
   res.json({
     success: true,
     task: newTask,
-    subtasks: scheduledSubtasks
+    subtasks: scheduledSubtasks,
+    traceMessage
   });
 });
 
@@ -87,12 +88,13 @@ schedulerRouter.get('/scheduler/status', requireLocalIdentity, (req: Authenticat
   const enrichedSubtasks = subtasks.map(st => {
     const parentTask = tasks.find(t => t.id === st.taskId) || store.getDoc('tasks', st.taskId) as Task;
     const priority = parentTask ? parentTask.priority : 5;
-    const score = UrgencyEngine.calculateUrgencyScore(st, priority, virtualTime, subtasks);
+    const { score, breakdown } = UrgencyEngine.calculateUrgencyScore(st, priority, virtualTime, subtasks);
     const band = UrgencyEngine.getUrgencyBand(score);
     return {
       ...st,
       urgencyScore: score,
-      urgencyBand: band
+      urgencyBand: band,
+      urgencyBreakdown: breakdown
     };
   });
 

@@ -44,7 +44,21 @@ export interface Subtask {
   };
   urgencyScore?: number;
   urgencyBand?: 'green' | 'amber' | 'red';
+  urgencyBreakdown?: UrgencyBreakdown;
   missedFlagged?: boolean;
+}
+
+export interface UrgencyFactor {
+  raw: string;
+  weighted: number;
+  weight: number;
+}
+
+export interface UrgencyBreakdown {
+  timePressure: UrgencyFactor;
+  priority: UrgencyFactor;
+  dependency: UrgencyFactor;
+  historicalRisk: UrgencyFactor;
 }
 
 export interface Settings {

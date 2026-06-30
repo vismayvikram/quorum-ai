@@ -8,6 +8,7 @@ import { CalendarView } from './components/CalendarView';
 import { TaskSidebar } from './components/TaskSidebar';
 import { TaskCreatorModal } from './components/TaskCreatorModal';
 import { TaskDetailModal } from './components/TaskDetailModal';
+import { ExcuseModal } from './components/ExcuseModal';
 import { InsightCard } from './components/InsightCard';
 import { getLocalIdentity } from './lib/identity';
 import { apiFetch } from './lib/api';
@@ -24,6 +25,10 @@ export default function App() {
   const [isTaskCreatorOpen, setIsTaskCreatorOpen] = useState(false);
   const [selectedSubtaskId, setSelectedSubtaskId] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
+
+  // Excuse Modal State
+  const [isExcuseModalOpen, setIsExcuseModalOpen] = useState(false);
+  const [excuseSubtask, setExcuseSubtask] = useState<Subtask | null>(null);
 
   // Scheduler & Accountability State
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -437,6 +442,7 @@ export default function App() {
                   taxes={taxes}
                   virtualTime={virtualTime}
                   tone={effectiveTone}
+                  onActionApplied={() => setRefreshTrigger(prev => prev + 1)}
                 />
               </div>
             </motion.div>
@@ -461,6 +467,24 @@ export default function App() {
         isOpen={!!selectedSubtaskId}
         onClose={() => setSelectedSubtaskId(null)}
         onComplete={handleCompleteSubtask}
+        onPleadCase={(st) => {
+          setExcuseSubtask(st);
+          setIsExcuseModalOpen(true);
+        }}
+      />
+
+      {/* Excuse Modal (Accountability Hearing) */}
+      <ExcuseModal
+        subtask={excuseSubtask}
+        virtualTime={virtualTime}
+        isOpen={isExcuseModalOpen}
+        onClose={() => {
+          setIsExcuseModalOpen(false);
+          setExcuseSubtask(null);
+        }}
+        onSuccess={() => {
+          setRefreshTrigger(prev => prev + 1);
+        }}
       />
     </div>
   );
