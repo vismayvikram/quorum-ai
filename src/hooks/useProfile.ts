@@ -69,6 +69,7 @@ export function useProfile() {
       const res = await apiFetch('/api/auth/logout', { method: 'POST' });
       if (res.ok) {
         localStorage.removeItem('session_token');
+        localStorage.removeItem('lmls_user_id');
         setProfile(null);
         setNeedsLogin(true);
       }

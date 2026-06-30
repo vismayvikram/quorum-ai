@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from "express";
 import path from "path";
+import fs from "fs";
 import cookieParser from "cookie-parser";
 import { createServer as createViteServer } from "vite";
 import { store } from "./server/db/store";
@@ -20,6 +21,29 @@ async function startServer() {
 
   app.use(express.json());
   app.use(cookieParser());
+
+  // Safe endpoint for retrieving Firebase config at runtime rather than build-time
+  app.get('/api/firebase-config', (req, res) => {
+    try {
+      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+      if (fs.existsSync(configPath)) {
+        const fileContent = fs.readFileSync(configPath, 'utf-8');
+        return res.json(JSON.parse(fileContent));
+      }
+    } catch (e) {
+      console.error("Error reading firebase-applet-config.json:", e);
+    }
+    
+    // Fallback to environment variables
+    res.json({
+      apiKey: process.env.VITE_FIREBASE_API_KEY || process.env.FIREBASE_API_KEY || "",
+      authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || process.env.FIREBASE_AUTH_DOMAIN || "",
+      projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || "",
+      storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || "",
+      messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || process.env.FIREBASE_MESSAGING_SENDER_ID || "",
+      appId: process.env.VITE_FIREBASE_APP_ID || process.env.FIREBASE_APP_ID || ""
+    });
+  });
 
   // Mount API Routers
   app.use('/api', timeRouter);

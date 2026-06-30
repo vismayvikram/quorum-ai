@@ -8,6 +8,7 @@ export interface TimeWindow {
 
 export interface Profile {
   id: string; // The UUID
+  email?: string;
   goals: string;
   context: string;
   tone: Tone;

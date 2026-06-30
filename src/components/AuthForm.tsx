@@ -28,6 +28,40 @@ export function AuthForm({ onAuthSuccess }: AuthFormProps) {
     return () => clearInterval(interval);
   }, []);
 
+  const handleGuestLogin = async () => {
+    setError(null);
+    setLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/anonymous', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to enter guest demo');
+      }
+
+      if (data.token) {
+        localStorage.setItem('session_token', data.token);
+      }
+
+      if (data.user && data.user.id) {
+        localStorage.setItem('lmls_user_id', data.user.id);
+      }
+
+      onAuthSuccess();
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -57,6 +91,10 @@ export function AuthForm({ onAuthSuccess }: AuthFormProps) {
 
       if (data.token) {
         localStorage.setItem('session_token', data.token);
+      }
+
+      if (data.user && data.user.id) {
+        localStorage.setItem('lmls_user_id', data.user.id);
       }
 
       onAuthSuccess();
@@ -196,6 +234,21 @@ export function AuthForm({ onAuthSuccess }: AuthFormProps) {
               ) : (
                 'Continue'
               )}
+            </button>
+
+            <div className="relative flex py-2 items-center">
+              <div className="flex-grow border-t border-zinc-200"></div>
+              <span className="flex-shrink mx-4 text-zinc-400 text-[10px] uppercase font-mono tracking-wider">or</span>
+              <div className="flex-grow border-t border-zinc-200"></div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGuestLogin}
+              disabled={loading}
+              className="w-full bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 font-medium rounded-xl py-3.5 text-sm transition-all focus:outline-none focus:ring-2 focus:ring-zinc-200 focus:ring-offset-2 disabled:opacity-50 flex items-center justify-center cursor-pointer shadow-sm"
+            >
+              Enter as Guest / Judge Demo
             </button>
           </form>
 

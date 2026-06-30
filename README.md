@@ -2,7 +2,7 @@
 
 **Decisions made. Deadlines kept.**
 
-Quorum is an agentic productivity ecosystem built for addressing the *"Last-Minute Life Saver"* problem statement. Instead of another reminder app that gets swiped away and ignored, Quorum decomposes goals into executable plans, schedules them around how you actually work, and enforces follow-through with real, applied consequences when a deadline slips.
+Quorum is an agentic productivity ecosystem built for the **Gemini API Developer Competition**, addressing the *"Last-Minute Life Saver"* problem statement. Instead of another reminder app that gets swiped away and ignored, Quorum decomposes goals into executable plans, schedules them around how you actually work, and enforces follow-through with real, applied consequences when a deadline slips.
 
 ---
 

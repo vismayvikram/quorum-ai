@@ -90,6 +90,7 @@ authRouter.post('/auth/register', async (req, res) => {
     // Create the matching profile doc (same onboarding shape)
     const profile = {
       id: userId,
+      email: email.toLowerCase(),
       goals: '',
       context: '',
       tone: 'neutral',
@@ -169,6 +170,50 @@ authRouter.post('/auth/login', async (req, res) => {
 authRouter.post('/auth/logout', (req, res) => {
   res.clearCookie('session', getCookieOptions(req));
   res.json({ success: true });
+});
+
+// Anonymous Guest / Judge Demo Access
+authRouter.post('/auth/anonymous', (req, res) => {
+  try {
+    const secret = getJwtSecret();
+    const userId = `anon-${uuidv4()}`;
+
+    // Create the matching profile doc (empty onboarding context)
+    const profile = {
+      id: userId,
+      goals: '',
+      context: '',
+      tone: 'neutral',
+      focusHours: [{ start: '09:00', end: '17:00' }],
+      createdAt: Date.now()
+    };
+    store.setDoc('profiles', userId, profile);
+
+    // Initialize default settings
+    store.setDoc('settings', userId, {
+      userId,
+      blockedWindows: [],
+      durationMultiplier: 1.0,
+      developerTimeControlsEnabled: false
+    });
+
+    // Create signed JWT
+    const token = jwt.sign({ userId }, secret, { expiresIn: '30d' });
+
+    // Set cookie
+    res.cookie('session', token, {
+      ...getCookieOptions(req),
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: { id: userId, isGuest: true }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Internal server error during guest login' });
+  }
 });
 
 // Explicit Migration Endpoint
